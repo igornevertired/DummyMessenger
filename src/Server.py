@@ -10,9 +10,9 @@ from sqlalchemy import desc, select
 from uvicorn import Server, Config
 from db.models import Base, Message
 from dotenv import load_dotenv
-from db.schemas import UserBodyRequestToDB, UserBodyAll, MessagesCount
+from db.schemas import UserMessageCreate, UserMessageFull, MessageStatistics
+from logger import logger
 
-# Загрузка переменных окружения
 load_dotenv()
 
 DB_USER = os.getenv("DB_USER")
@@ -21,7 +21,7 @@ DB_HOST = os.getenv("DB_HOST")
 DB_NAME = os.getenv("DB_NAME")
 
 DATABASE_URL = f'postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:5432/{DB_NAME}'
-print(f"Connecting to database: {DATABASE_URL}")
+logger.info(f"Connecting to database: {DATABASE_URL}")
 
 engine = create_async_engine(DATABASE_URL,
                              echo=True,
@@ -34,14 +34,18 @@ AsyncSessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=e
 
 
 async def create_database():
-    """Создает базу данных, если она не существует."""
+    """
+    Создает базу данных, если она не существует
+
+    """
+
     conn = await asyncpg.connect(user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=5432, database='postgres')
     db_exists = await conn.fetchval(f"SELECT 1 FROM pg_database WHERE datname = '{DB_NAME}'")
     if not db_exists:
         await conn.execute(f'CREATE DATABASE "{DB_NAME}" OWNER {DB_USER}')
-        print(f"База данных {DB_NAME} создана.")
+        logger.info(f"База данных {DB_NAME} создана.")
     else:
-        print(f"База данных {DB_NAME} уже существует.")
+        logger.info(f"База данных {DB_NAME} уже существует.")
 
     await conn.close()
 
@@ -51,22 +55,22 @@ async def create_database():
 
 
 class MessageRepository:
-    """Репозиторий для работы с сообщениями"""
+    """
+    Репозиторий для работы с сообщениями
+
+    """
 
     @classmethod
-    async def add_message_get_last_ten(cls, user_post: UserBodyRequestToDB):
+    async def add_message_get_last_ten(cls, user_post: UserMessageCreate):
         async with AsyncSessionLocal() as session:
-            # Подсчет количества сообщений от пользователя
             query = select(Message).filter(Message.name == user_post.name)
-            user_message_count = (await session.execute(query)).scalars().count() + 1
+            user_message_count = len((await session.execute(query)).scalars().all()) + 1
 
-            # Добавление нового сообщения
             new_message = Message(name=user_post.name, text=user_post.text, count=user_message_count)
             session.add(new_message)
             await session.commit()
             await session.refresh(new_message)
 
-            # Получение последних 10 сообщений пользователя
             query = (
                 select(Message)
                 .filter(Message.name == new_message.name)
@@ -77,8 +81,8 @@ class MessageRepository:
             last_ten_messages = result.scalars().all()
 
             return {
-                'messages': [UserBodyAll.model_validate(msg) for msg in last_ten_messages],
-                'count_messages': MessagesCount.model_validate(last_ten_messages[0])
+                'messages': [UserMessageFull.model_validate(msg) for msg in last_ten_messages],
+                'count_messages': MessageStatistics.model_validate(last_ten_messages[0])
             }
 
 
@@ -86,28 +90,30 @@ message_route = APIRouter()
 
 
 @message_route.post('/add_message')
-async def add_message(user_post: Annotated[UserBodyRequestToDB, Depends()]):
+async def add_message(user_post: Annotated[UserMessageCreate, Depends()]):
     return await MessageRepository.add_message_get_last_ten(user_post)
 
 
 def create_app():
-    """Создание FastAPI приложения"""
+    """
+    Создание FastAPI приложения
+
+    """
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         try:
-            print('tut?')
             await create_database()
 
             async with engine.begin() as conn:
                 try:
                     await conn.run_sync(Base.metadata.create_all)
-                    print("Схема базы данных обновлена.")
+                    logger.info("Схема базы данных обновлена.")
                 except SQLAlchemyError as e:
-                    print(f"Ошибка при создании таблиц: {e}")
+                    logger.error(f"Ошибка при создании таблиц: {e}")
 
         except Exception as e:
-            print(f"❌ Ошибка при создании БД: {e}")
+            logger.error(f"❌ Ошибка при создании БД: {e}")
         yield
 
     app = FastAPI(lifespan=lifespan)
@@ -125,8 +131,12 @@ class MyServer(Server):
 
 
 async def run():
-    """Запуск нескольких серверов"""
-    app_ports = [5002]
+    """
+    Запуск нескольких серверов
+
+    """
+
+    app_ports = [5001, 5002]
     tasks = []
     for port in app_ports:
         config = Config("Server:app", host="127.0.0.1", port=port, reload=True)

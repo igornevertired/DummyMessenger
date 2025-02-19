@@ -2,15 +2,17 @@ from pydantic import BaseModel, ConfigDict
 import datetime
 
 
-class UserBodyRequestToDB(BaseModel):
+class UserMessageCreate(BaseModel):
     name: str
     text: str
 
-class UserBodyAll(UserBodyRequestToDB):
+
+class UserMessageFull(UserMessageCreate):
     id: int
     date: datetime.datetime
     model_config = ConfigDict(from_attributes=True)
 
-class MessagesCount(BaseModel):
+
+class MessageStatistics(BaseModel):
     count: int
     model_config = ConfigDict(from_attributes=True)
